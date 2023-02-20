@@ -1,5 +1,11 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm.auto import trange
+from TTS.api import TTS
+import soundfile as sf
+import librosa as lr
+import numpy as np
+import subprocess
+import tempfile
 import asyncio
 import random
 import torch
@@ -11,6 +17,21 @@ import torch
 
 
 # asyncio.run(main())
+# print(TTS.list_models())
+tts_model = TTS("tts_models/en/vctk/vits")
+
+
+def say_tts(tts, text, speaker_id="p300", sr=22050):
+    # with tempfile.NamedTemporaryFile("wb", suffix=".wav") as tf:
+        # temp_file = tf.name
+        # subprocess.call(["tts", "--text", text, "--model_name", model_name, "--speaker_id", speaker_id, "--out_path", temp_file])
+        # subprocess.call(["ffmpeg", "-y", "-i", temp_file, "-af", "asetrate=22050*4/3,atempo=3/4", out_file])
+    wav = tts.tts("This is a test! This is also a test!!", speaker=speaker_id)
+    wav_ = lr.effects.pitch_shift(np.asarray(wav), sr, n_steps=6)
+    # sf.write("result.wav", wav_, sr)
+    return wav_, sr
+
+say_tts(tts_model, "Hello world, I am a bot")
 
 
 random.seed(2)
@@ -26,8 +47,6 @@ model = AutoModelForCausalLM.from_pretrained(model_name,
                                              load_in_8bit=True,
                                              device_map="auto"
                                              )
-# tts --text "Hello world! I am saying something. After the person broke the rode, the ffffffffff author didn't >_<." --model_name "tts_models/en/vctk/vits" --speaker_id "p300" --out_path output.wav
-# ffmpeg -y -i output.wav -af 'asetrate=22050*4/3,atempo=3/4'  pitchshift.wav
 
 # import torch
 # MODEL_NAME = "standard_float"
@@ -117,9 +136,9 @@ for i in range(samples):
     text = prompt + "".join(q + a for q, a in qa[:10]) + "Q: What is your real name?\n"
     tokens = torch.LongTensor(tokenizer.encode(text)).unsqueeze(0)
     torch.manual_seed(12)
-    result = model.generate(input_ids=tokens.to(model.device), max_new_tokens=100, temperature=0.96, repetition_penalty=1.0, length_penalty=0.25,
+    result = model.generate(input_ids=tokens.to(model.device), max_new_tokens=300, temperature=0.96, repetition_penalty=1.0, length_penalty=0.25,
                             # penalty_alpha=0.6,
-                            do_sample=True, eos_token_id=50, pad_token_id=tokenizer.pad_token_id, max_new_length=200
+                            do_sample=True, eos_token_id=50, pad_token_id=tokenizer.pad_token_id,
     )
     answer = tokenizer.decode(result[0, tokens.shape[1] + 2:-1].detach().cpu().numpy().tolist())
     print(answer)
