@@ -1,3 +1,7 @@
 *oauth
 prompt
 *.wav
+*.png
+outputs/
+*.mp4
+**/__pycache__/

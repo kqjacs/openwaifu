@@ -2,6 +2,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm.auto import trange
 from TTS.api import TTS
 import soundfile as sf
+from PIL import Image
 import librosa as lr
 import numpy as np
 import subprocess
@@ -31,7 +32,7 @@ def say_tts(tts, text, speaker_id="p300", sr=22050):
     # sf.write("result.wav", wav_, sr)
     return wav_, sr
 
-say_tts(tts_model, "Hello world, I am a bot")
+# say_tts(tts_model, "Hello world, I am a bot")
 
 
 random.seed(2)
@@ -48,43 +49,42 @@ model = AutoModelForCausalLM.from_pretrained(model_name,
                                              device_map="auto"
                                              )
 
-# import torch
-# MODEL_NAME = "standard_float"
-# DEVICE_NAME = 'cuda'
-# device = torch.device(DEVICE_NAME)
+MODEL_NAME = "standard_float"
+DEVICE_NAME = model.device.type
+device = torch.device(DEVICE_NAME)
 
-# def load_poser(model: str, device: torch.device):
-#     print("Using the %s model." % model)
-#     if model == "standard_float":
-#         from tha3.poser.modes.standard_float import create_poser
-#         return create_poser(device)
-#     elif model == "standard_half":
-#         from tha3.poser.modes.standard_half import create_poser
-#         return create_poser(device)
-#     elif model == "separable_float":
-#         from tha3.poser.modes.separable_float import create_poser
-#         return create_poser(device)
-#     elif model == "separable_half":
-#         from tha3.poser.modes.separable_half import create_poser
-#         return create_poser(device)
-#     else:
-#         raise RuntimeError("Invalid model: '%s'" % model)
+def load_poser(model: str, device: torch.device):
+    print("Using the %s model." % model)
+    if model == "standard_float":
+        from tha3.poser.modes.standard_float import create_poser
+        return create_poser(device)
+    elif model == "standard_half":
+        from tha3.poser.modes.standard_half import create_poser
+        return create_poser(device)
+    elif model == "separable_float":
+        from tha3.poser.modes.separable_float import create_poser
+        return create_poser(device)
+    elif model == "separable_half":
+        from tha3.poser.modes.separable_half import create_poser
+        return create_poser(device)
+    else:
+        raise RuntimeError("Invalid model: '%s'" % model)
         
-# poser = load_poser(MODEL_NAME, DEVICE_NAME)
-# poser.get_modules()
+poser = load_poser(MODEL_NAME, DEVICE_NAME)
+poser.get_modules()
 
-
-
-# iris_small_left_index = pose_parameters.get_parameter_index("iris_small_left")
-# iris_small_right_index = pose_parameters.get_parameter_index("iris_small_right")
-# iris_rotation_x_index = pose_parameters.get_parameter_index("iris_rotation_x")
-# iris_rotation_y_index = pose_parameters.get_parameter_index("iris_rotation_y")
-# head_x_index = pose_parameters.get_parameter_index("head_x")
-# head_y_index = pose_parameters.get_parameter_index("head_y")
-# neck_z_index = pose_parameters.get_parameter_index("neck_z")
-# body_y_index = pose_parameters.get_parameter_index("body_y")
-# body_z_index = pose_parameters.get_parameter_index("body_z")
-# breathing_index = pose_parameters.get_parameter_index("breathing")
+from tha3.poser.modes.pose_parameters import get_pose_parameters
+pose_parameters = get_pose_parameters()
+iris_small_left_index = pose_parameters.get_parameter_index("iris_small_left")
+iris_small_right_index = pose_parameters.get_parameter_index("iris_small_right")
+iris_rotation_x_index = pose_parameters.get_parameter_index("iris_rotation_x")
+iris_rotation_y_index = pose_parameters.get_parameter_index("iris_rotation_y")
+head_x_index = pose_parameters.get_parameter_index("head_x")
+head_y_index = pose_parameters.get_parameter_index("head_y")
+neck_z_index = pose_parameters.get_parameter_index("neck_z")
+body_y_index = pose_parameters.get_parameter_index("body_y")
+body_z_index = pose_parameters.get_parameter_index("body_z")
+breathing_index = pose_parameters.get_parameter_index("breathing")
 
 # def get_pose():
 #     pose = torch.zeros(1, pose_size, dtype=poser.get_dtype())
@@ -124,14 +124,23 @@ model = AutoModelForCausalLM.from_pretrained(model_name,
 
 #     return pose.to(device)
 
-    # output_image = pytorch_image.detach().cpu()
-    # numpy_image = numpy.uint8(numpy.rint(convert_output_image_from_torch_to_numpy(output_image) * 255.0))
-    # pil_image = PIL.Image.fromarray(numpy_image, mode='RGBA')
 
-    # output_image = poser.pose(torch_input_image, pose)[0]
+from tha3.util import resize_PIL_image, extract_PIL_image_from_filelike, \
+    extract_pytorch_image_from_PIL_image, convert_output_image_from_torch_to_numpy
+pil_image = Image.open("/home/kqjacs/AFS/lm-benchmark-hook/data/images/crypko_00.png")
+torch_input_image = extract_pytorch_image_from_PIL_image(pil_image).to(device)
+pose_size = poser.get_num_parameters()
+pose = torch.zeros(1, pose_size, dtype=poser.get_dtype(), device=device)
+for i in trange(100):
+    pose[0, breathing_index] = np.sin(i / 20)
+    output_image = poser.pose(torch_input_image, pose)[0]
+    # output_image = pytorch_image.detach().cpu()
+    numpy_image = np.uint8(np.rint(convert_output_image_from_torch_to_numpy(output_image.detach().cpu()) * 255.0))
+    pil_image = Image.fromarray(numpy_image, mode='RGBA')
+    pil_image.save(f"outputs/anime{i:03d}.png")
 
 samples = 16
-for i in range(samples):
+for i in trange(samples):
     random.shuffle(qa)
     text = prompt + "".join(q + a for q, a in qa[:10]) + "Q: What is your real name?\n"
     tokens = torch.LongTensor(tokenizer.encode(text)).unsqueeze(0)
