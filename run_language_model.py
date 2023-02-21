@@ -5,6 +5,7 @@ import soundfile as sf
 from PIL import Image
 import librosa as lr
 import numpy as np
+import websockets
 import subprocess
 import threading
 import tempfile
@@ -14,6 +15,45 @@ import random
 import queue
 import torch
 import time
+import re
+
+
+TWITCH_NAME = "kqjacs"
+_cmd_pat = (
+    "^(@(?P<tags>[^ ]*) )?(:(?P<prefix>[^ ]+) +)?"
+    "(?P<command>[^ ]+)( *(?P<argument> .+))?"
+)
+_rfc_1459_command_regexp = re.compile(_cmd_pat)
+
+
+q = queue.Queue()
+async def socket():
+    async with websockets.connect("wss://irc-ws.chat.twitch.tv:443") as ws:
+        await ws.send("CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands")
+        await ws.send("PASS " + open("twitch_oauth").read())
+        await ws.send(f"NICK {TWITCH_NAME}")
+        await ws.send(f"JOIN #{TWITCH_NAME}")
+        while True:
+            text = await ws.recv()
+            grp = _rfc_1459_command_regexp.match(text).group
+            cmd, arg = grp("command"), grp("argument")
+            if cmd == "PING":
+                await ws.send("PONG")
+            elif cmd == "PRIVMSG":
+                q.put(arg)
+
+
+launch_thread = lambda: asyncio.run(socket())
+threading.Thread(target=launch_thread).start()
+while True:
+    time.sleep(5)
+    while True:
+        try:
+            print(q.get())
+        except queue.Empty:
+            time.sleep(5)
+            continue
+exit()
 
 
 class AudioPlayer():
@@ -24,30 +64,27 @@ class AudioPlayer():
         self._running = True
 
 
-    def play(self, audiopath):
+    def play(self, arr, sr):
         self._running = True
         #storing how much we have read already
         self.chunktotal = 0
-        wf = wave.open(audiopath, 'rb')
-        stream = self.audio.open(format =self.audio.get_format_from_width(wf.getsampwidth()),channels = wf.getnchannels(),rate = wf.getframerate(),output = True)
-        print(wf.getframerate())
+        stream = self.audio.open(format=self.audio.get_format_from_width(3), channels=1, rate=sr, output=True)
         # read data (based on the chunk size)
-        data = wf.readframes(self.chunk)
+        data = arr[:self.chunk]
         #THIS IS THE TOTAL LENGTH OF THE AUDIO
-        audiolength = wf.getnframes() / float(wf.getframerate())
+        audiolength = len(arr) / float(sr)
+        i = 0
 
         while self._running:
             if data != '':
                 stream.write(data)
                 self.chunktotal = self.chunktotal + self.chunk
                 #calculating the percentage
-                percentage = (self.chunktotal/wf.getnframes())*100
+                percentage = (self.chunktotal/len(arr))*100
                 #calculating the current seconds
-                current_seconds = self.chunktotal/float(wf.getframerate())
-                data = wf.readframes(self.chunk)
-
-            if data == b'':
-                break
+                current_seconds = self.chunktotal/float(sr)
+                data = arr
+                i = i + 1
 
         # cleanup stream
         stream.close()
@@ -77,7 +114,8 @@ def say_tts(tts, text, speaker_id="p300", sr=22050):
     return wav_, sr
 
 wav, sr = say_tts(tts_model, "Hello world, I am a bot")
-playback = Playback()
+player = AudioPlayer()
+
 
 
 random.seed(2)
