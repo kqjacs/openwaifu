@@ -8,11 +8,52 @@ import numpy as np
 import subprocess
 import threading
 import tempfile
+import pyaudio
 import asyncio
 import random
 import queue
 import torch
 import time
+
+
+class AudioPlayer():
+    """AudioPlayer class"""
+    def __init__(self):
+        self.chunk = 1024
+        self.audio = pyaudio.PyAudio()
+        self._running = True
+
+
+    def play(self, audiopath):
+        self._running = True
+        #storing how much we have read already
+        self.chunktotal = 0
+        wf = wave.open(audiopath, 'rb')
+        stream = self.audio.open(format =self.audio.get_format_from_width(wf.getsampwidth()),channels = wf.getnchannels(),rate = wf.getframerate(),output = True)
+        print(wf.getframerate())
+        # read data (based on the chunk size)
+        data = wf.readframes(self.chunk)
+        #THIS IS THE TOTAL LENGTH OF THE AUDIO
+        audiolength = wf.getnframes() / float(wf.getframerate())
+
+        while self._running:
+            if data != '':
+                stream.write(data)
+                self.chunktotal = self.chunktotal + self.chunk
+                #calculating the percentage
+                percentage = (self.chunktotal/wf.getnframes())*100
+                #calculating the current seconds
+                current_seconds = self.chunktotal/float(wf.getframerate())
+                data = wf.readframes(self.chunk)
+
+            if data == b'':
+                break
+
+        # cleanup stream
+        stream.close()
+
+    def stop(self):
+        self._running = False
 
 
 # async def main():
@@ -22,36 +63,36 @@ import time
 
 # asyncio.run(main())
 # print(TTS.list_models())
-if False:
-    tts_model = TTS("tts_models/en/vctk/vits")
+tts_model = TTS("tts_models/en/vctk/vits")
 
 
-    def say_tts(tts, text, speaker_id="p300", sr=22050):
-        # with tempfile.NamedTemporaryFile("wb", suffix=".wav") as tf:
-            # temp_file = tf.name
-            # subprocess.call(["tts", "--text", text, "--model_name", model_name, "--speaker_id", speaker_id, "--out_path", temp_file])
-            # subprocess.call(["ffmpeg", "-y", "-i", temp_file, "-af", "asetrate=22050*4/3,atempo=3/4", out_file])
-        wav = tts.tts("This is a test! This is also a test!!", speaker=speaker_id)
-        wav_ = lr.effects.pitch_shift(np.asarray(wav), sr, n_steps=6)
-        # sf.write("result.wav", wav_, sr)
-        return wav_, sr
+def say_tts(tts, text, speaker_id="p300", sr=22050):
+    # with tempfile.NamedTemporaryFile("wb", suffix=".wav") as tf:
+        # temp_file = tf.name
+        # subprocess.call(["tts", "--text", text, "--model_name", model_name, "--speaker_id", speaker_id, "--out_path", temp_file])
+        # subprocess.call(["ffmpeg", "-y", "-i", temp_file, "-af", "asetrate=22050*4/3,atempo=3/4", out_file])
+    wav = tts.tts("This is a test! This is also a test!!", speaker=speaker_id)
+    wav_ = lr.effects.pitch_shift(np.asarray(wav), sr, n_steps=6)
+    # sf.write("result.wav", wav_, sr)
+    return wav_, sr
 
-    # say_tts(tts_model, "Hello world, I am a bot")
+wav, sr = say_tts(tts_model, "Hello world, I am a bot")
+playback = Playback()
 
 
-    random.seed(2)
-    torch.set_grad_enabled(False)
-    text = open("prompt").read()
-    prompt, *qa = list(open("prompt"))
-    q, a = qa[::2], qa[1::2]
-    qa = list(zip(q, a))
-    model_name = "EleutherAI/pythia-2.8b-deduped"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name,
-                                                low_cpu_mem_usage=True,
-                                                load_in_8bit=True,
-                                                device_map="auto"
-                                                )
+random.seed(2)
+torch.set_grad_enabled(False)
+text = open("prompt").read()
+prompt, *qa = list(open("prompt"))
+q, a = qa[::2], qa[1::2]
+qa = list(zip(q, a))
+model_name = "EleutherAI/pythia-2.8b-deduped"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name,
+                                            low_cpu_mem_usage=True,
+                                            load_in_8bit=True,
+                                            device_map="auto"
+                                            )
 
 q = queue.Queue()
 
