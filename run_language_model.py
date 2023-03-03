@@ -1,4 +1,5 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from just_playback import Playback
 from tqdm.auto import trange
 from TTS.api import TTS
 import soundfile as sf
@@ -15,6 +16,7 @@ import random
 import queue
 import torch
 import time
+import cv2
 import re
 
 
@@ -26,119 +28,55 @@ _cmd_pat = (
 _rfc_1459_command_regexp = re.compile(_cmd_pat)
 
 
-q = queue.Queue()
-# async def socket():
-#     async with websockets.connect("wss://irc-ws.chat.twitch.tv:443") as ws:
-#         await ws.send("CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands")
-#         await ws.send("PASS " + open("twitch_oauth").read())
-#         await ws.send(f"NICK {TWITCH_NAME}")
-#         await ws.send(f"JOIN #{TWITCH_NAME}")
-#         while True:
-#             text = await ws.recv()
-#             grp = _rfc_1459_command_regexp.match(text).group
-#             cmd, arg = grp("command"), grp("argument")
-#             if cmd == "PING":
-#                 await ws.send("PONG")
-#             elif cmd == "PRIVMSG":
-#                 q.put(arg)
+chat_queue = queue.Queue()
+async def socket(chat_queue):
+    async with websockets.connect("wss://irc-ws.chat.twitch.tv:443") as ws:
+        await ws.send("CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands")
+        await ws.send("PASS " + open("twitch_oauth").read())
+        await ws.send(f"NICK {TWITCH_NAME}")
+        await ws.send(f"JOIN #{TWITCH_NAME}")
+        while True:
+            text = await ws.recv()
+            grp = _rfc_1459_command_regexp.match(text).group
+            cmd, arg = grp("command"), grp("argument")
+            if cmd == "PING":
+                await ws.send("PONG")
+            elif cmd == "PRIVMSG":
+                chat_queue.put(arg)
 
 
-# launch_thread = lambda: asyncio.run(socket())
-# threading.Thread(target=launch_thread).start()
-# while True:
-#     time.sleep(5)
-#     while True:
-#         try:
-#             print(q.get())
-#         except queue.Empty:
-#             time.sleep(5)
-#             continue
-# exit()
-
-
-class AudioPlayer():
-    """AudioPlayer class"""
-    def __init__(self):
-        self.chunk = 1024
-        self.audio = pyaudio.PyAudio()
-        self._running = True
-
-
-    def play(self, arr, sr):
-        arr = arr - arr.min()
-        arr = arr / arr.max()
-        arr = (arr * 255).astype(np.uint8)
-        self._running = True
-        #storing how much we have read already
-        self.chunktotal = 0
-        stream = self.audio.open(format=self.audio.get_format_from_width(1), channels=1, rate=sr, output=True)
-        # read data (based on the chunk size)
-        data, arr = arr[:self.chunk], arr[self.chunk:]
-        #THIS IS THE TOTAL LENGTH OF THE AUDIO
-        audiolength = len(arr) / float(sr)
-        i = 0
-
-        while self._running:
-            if len(arr):
-                stream.write(data)
-                self.chunktotal = self.chunktotal + self.chunk
-                #calculating the percentage
-                percentage = (self.chunktotal/len(arr))*100
-                #calculating the current seconds
-                current_seconds = self.chunktotal/float(sr)
-                data, arr = arr[:self.chunk], arr[self.chunk:]
-                i = i + 1
-
-        # cleanup stream
-        stream.close()
-
-    def stop(self):
-        self._running = False
-
-
-# async def main():
-    # await asyncio.sleep(1)
-    # print('hello')
-
+launch_thread = lambda chat_queue: asyncio.run(socket(chat_queue))
+threading.Thread(target=launch_thread, args=(chat_queue,)).start()
 
 # asyncio.run(main())
 # print(TTS.list_models())
 tts_model = TTS("tts_models/en/vctk/vits")
 
 
-def say_tts(tts, text, speaker_id="p300", sr=22050):
+def say_tts(tts, text, callback=lambda vol: None, speaker_id="p300", sr=22050):
     # with tempfile.NamedTemporaryFile("wb", suffix=".wav") as tf:
         # temp_file = tf.name
         # subprocess.call(["tts", "--text", text, "--model_name", model_name, "--speaker_id", speaker_id, "--out_path", temp_file])
         # subprocess.call(["ffmpeg", "-y", "-i", temp_file, "-af", "asetrate=22050*4/3,atempo=3/4", out_file])
-    wav = tts.tts("This is a test! This is also a test!!", speaker=speaker_id)
+    wav = tts.tts(text, speaker=speaker_id)
     wav_ = lr.effects.pitch_shift(np.asarray(wav), sr, n_steps=6)
     # sf.write("result.wav", wav_, sr)
-    return wav_, sr
-
-wav, sr = say_tts(tts_model, "Hello world, I am a bot")
-player = AudioPlayer()
-player.play(wav, sr)
-
-
-
-random.seed(2)
-torch.set_grad_enabled(False)
-text = open("prompt").read()
-prompt, *qa = list(open("prompt"))
-q, a = qa[::2], qa[1::2]
-qa = list(zip(q, a))
-model_name = "EleutherAI/pythia-2.8b-deduped"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name,
-                                            low_cpu_mem_usage=True,
-                                            load_in_8bit=True,
-                                            device_map="auto"
-                                            )
+    
+    vols = (np.lib.stride_tricks.sliding_window_view(wav_, (sr // 2,)) ** 2).mean(-1)
+    vols /= vols.max()
+    vols = np.sin(np.arange(len(vols)) / sr * 6) * (vols > 0.33)
+    playback = Playback()
+    with tempfile.NamedTemporaryFile("wb", suffix=".wav") as tf:
+        sf.write(tf.name, wav_, sr)
+        playback.load_file(tf.name)
+    playback.play()
+    while playback.active:
+        time.sleep(0.01)
+        callback(vols[min(int(playback.curr_pos * sr), len(vols) - 1)])
 
 q = queue.Queue()
 
-def run_poser():
+def run_poser(q):
     MODEL_NAME = "standard_float"
     device = torch.device("cuda")
 
@@ -164,6 +102,10 @@ def run_poser():
 
     from tha3.poser.modes.pose_parameters import get_pose_parameters
     pose_parameters = get_pose_parameters()
+    mouth_index = pose_parameters.get_parameter_index(f"mouth_aaa")
+    # mouth_left_index = pose_parameters.get_parameter_index(f"mouth_aaa_left")
+    # mouth_right_index = pose_parameters.get_parameter_index(f"mouth_aaa_right")
+    iris_small_left_index = pose_parameters.get_parameter_index("iris_small_left")
     iris_small_left_index = pose_parameters.get_parameter_index("iris_small_left")
     iris_small_right_index = pose_parameters.get_parameter_index("iris_small_right")
     iris_rotation_x_index = pose_parameters.get_parameter_index("iris_rotation_x")
@@ -221,27 +163,56 @@ def run_poser():
     pose_size = poser.get_num_parameters()
     pose = torch.zeros(1, pose_size, dtype=poser.get_dtype(), device=device)
     i = 0
+    val = 0
     while True:
         try:
             val = q.get_nowait()
         except queue.Empty:
-            val = np.sin(i / 20)
-        pose[0, breathing_index] = val
+            pass
+        pose[0, breathing_index] = np.sin(i / 20)
+        pose[0, mouth_index] = val
+        # pose[0, mouth_left_index] = val
+        # pose[0, mouth_right_index] = val
         output_image = poser.pose(torch_input_image, pose)[0]
         # output_image = pytorch_image.detach().cpu()
         numpy_image = np.uint8(np.rint(convert_output_image_from_torch_to_numpy(output_image.detach().cpu()) * 255.0))
         pil_image = Image.fromarray(numpy_image, mode='RGBA')
-        pil_image.save(f"outputs/anime{i:03d}.png")
+        image = np.asarray(pil_image)
+        green = image[..., :-1].copy()
+        green[..., [0, 2]] = 0
+        green[..., 1] = 255
+        alpha = image[..., -1:] > 0
+        image = image[..., :-1] * alpha + (~alpha) * green
+        cv2.imshow("frame", image[..., ::-1])
+        cv2.waitKey(1)
+        # pil_image.save(f"outputs/anime{i:03d}.png")
         i += 1
-        i = i % 100
-        time.sleep(0.01)
+        # time.sleep(0.01)
 
 
-threading.Thread(target=run_poser).run()
-for i in range(1000):
-    time.sleep(0.5)
-    q.put(np.sin(i/20))
-time.sleep(1000)
+threading.Thread(target=run_poser, args=(q,)).start()
+time.sleep(4)
+def putify(x):
+    with q.mutex:
+        q.queue.clear()
+    q.put(x)
+say_tts(tts_model, "Hello world. I am a bot", callback=putify)
+
+
+
+random.seed(2)
+torch.set_grad_enabled(False)
+text = open("prompt").read()
+prompt, *qa = list(open("prompt"))
+q, a = qa[::2], qa[1::2]
+qa = list(zip(q, a))
+model_name = "EleutherAI/pythia-2.8b-deduped"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name,
+                                            low_cpu_mem_usage=True,
+                                            load_in_8bit=True,
+                                            device_map="auto"
+                                            )
 
 
 samples = 16
