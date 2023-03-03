@@ -27,33 +27,33 @@ _rfc_1459_command_regexp = re.compile(_cmd_pat)
 
 
 q = queue.Queue()
-async def socket():
-    async with websockets.connect("wss://irc-ws.chat.twitch.tv:443") as ws:
-        await ws.send("CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands")
-        await ws.send("PASS " + open("twitch_oauth").read())
-        await ws.send(f"NICK {TWITCH_NAME}")
-        await ws.send(f"JOIN #{TWITCH_NAME}")
-        while True:
-            text = await ws.recv()
-            grp = _rfc_1459_command_regexp.match(text).group
-            cmd, arg = grp("command"), grp("argument")
-            if cmd == "PING":
-                await ws.send("PONG")
-            elif cmd == "PRIVMSG":
-                q.put(arg)
+# async def socket():
+#     async with websockets.connect("wss://irc-ws.chat.twitch.tv:443") as ws:
+#         await ws.send("CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands")
+#         await ws.send("PASS " + open("twitch_oauth").read())
+#         await ws.send(f"NICK {TWITCH_NAME}")
+#         await ws.send(f"JOIN #{TWITCH_NAME}")
+#         while True:
+#             text = await ws.recv()
+#             grp = _rfc_1459_command_regexp.match(text).group
+#             cmd, arg = grp("command"), grp("argument")
+#             if cmd == "PING":
+#                 await ws.send("PONG")
+#             elif cmd == "PRIVMSG":
+#                 q.put(arg)
 
 
-launch_thread = lambda: asyncio.run(socket())
-threading.Thread(target=launch_thread).start()
-while True:
-    time.sleep(5)
-    while True:
-        try:
-            print(q.get())
-        except queue.Empty:
-            time.sleep(5)
-            continue
-exit()
+# launch_thread = lambda: asyncio.run(socket())
+# threading.Thread(target=launch_thread).start()
+# while True:
+#     time.sleep(5)
+#     while True:
+#         try:
+#             print(q.get())
+#         except queue.Empty:
+#             time.sleep(5)
+#             continue
+# exit()
 
 
 class AudioPlayer():
@@ -65,25 +65,28 @@ class AudioPlayer():
 
 
     def play(self, arr, sr):
+        arr = arr - arr.min()
+        arr = arr / arr.max()
+        arr = (arr * 255).astype(np.uint8)
         self._running = True
         #storing how much we have read already
         self.chunktotal = 0
-        stream = self.audio.open(format=self.audio.get_format_from_width(3), channels=1, rate=sr, output=True)
+        stream = self.audio.open(format=self.audio.get_format_from_width(1), channels=1, rate=sr, output=True)
         # read data (based on the chunk size)
-        data = arr[:self.chunk]
+        data, arr = arr[:self.chunk], arr[self.chunk:]
         #THIS IS THE TOTAL LENGTH OF THE AUDIO
         audiolength = len(arr) / float(sr)
         i = 0
 
         while self._running:
-            if data != '':
+            if len(arr):
                 stream.write(data)
                 self.chunktotal = self.chunktotal + self.chunk
                 #calculating the percentage
                 percentage = (self.chunktotal/len(arr))*100
                 #calculating the current seconds
                 current_seconds = self.chunktotal/float(sr)
-                data = arr
+                data, arr = arr[:self.chunk], arr[self.chunk:]
                 i = i + 1
 
         # cleanup stream
@@ -115,6 +118,7 @@ def say_tts(tts, text, speaker_id="p300", sr=22050):
 
 wav, sr = say_tts(tts_model, "Hello world, I am a bot")
 player = AudioPlayer()
+player.play(wav, sr)
 
 
 
