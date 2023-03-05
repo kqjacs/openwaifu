@@ -20,34 +20,6 @@ import cv2
 import re
 
 
-TWITCH_NAME = "kqjacs"
-_cmd_pat = (
-    "^(@(?P<tags>[^ ]*) )?(:(?P<prefix>[^ ]+) +)?"
-    "(?P<command>[^ ]+)( *(?P<argument> .+))?"
-)
-_rfc_1459_command_regexp = re.compile(_cmd_pat)
-
-
-chat_queue = queue.Queue()
-async def socket(chat_queue):
-    async with websockets.connect("wss://irc-ws.chat.twitch.tv:443") as ws:
-        await ws.send("CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands")
-        await ws.send("PASS " + open("twitch_oauth").read())
-        await ws.send(f"NICK {TWITCH_NAME}")
-        await ws.send(f"JOIN #{TWITCH_NAME}")
-        while True:
-            text = await ws.recv()
-            grp = _rfc_1459_command_regexp.match(text).group
-            cmd, arg = grp("command"), grp("argument")
-            if cmd == "PING":
-                await ws.send("PONG")
-            elif cmd == "PRIVMSG":
-                chat_queue.put(arg)
-
-
-launch_thread = lambda chat_queue: asyncio.run(socket(chat_queue))
-threading.Thread(target=launch_thread, args=(chat_queue,)).start()
-
 # asyncio.run(main())
 # print(TTS.list_models())
 tts_model = TTS("tts_models/en/vctk/vits")
@@ -191,12 +163,12 @@ def run_poser(q):
 
 
 threading.Thread(target=run_poser, args=(q,)).start()
-time.sleep(4)
+# time.sleep(4)
 def putify(x):
     with q.mutex:
         q.queue.clear()
     q.put(x)
-say_tts(tts_model, "Hello world. I am a bot", callback=putify)
+# say_tts(tts_model, "Hello world. I am a bot", callback=putify)
 
 
 
@@ -204,8 +176,8 @@ random.seed(2)
 torch.set_grad_enabled(False)
 text = open("prompt").read()
 prompt, *qa = list(open("prompt"))
-q, a = qa[::2], qa[1::2]
-qa = list(zip(q, a))
+qs, a = qa[::2], qa[1::2]
+qa = list(zip(qs, a))
 model_name = "EleutherAI/pythia-2.8b-deduped"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name,
@@ -215,15 +187,52 @@ model = AutoModelForCausalLM.from_pretrained(model_name,
                                             )
 
 
-samples = 16
-for i in trange(samples):
+def answer(qo):
     random.shuffle(qa)
-    text = prompt + "".join(q + a for q, a in qa[:10]) + "Q: What is your real name?\n"
+    text = prompt + "".join(qu + a for qu, a in qa[:10]) + f"Q: {qo}\n"
     tokens = torch.LongTensor(tokenizer.encode(text)).unsqueeze(0)
-    torch.manual_seed(12)
     result = model.generate(input_ids=tokens.to(model.device), max_new_tokens=300, temperature=0.96, repetition_penalty=1.0, length_penalty=0.25,
                             # penalty_alpha=0.6,
                             do_sample=True, eos_token_id=50, pad_token_id=tokenizer.pad_token_id,
     )
-    answer = tokenizer.decode(result[0, tokens.shape[1] + 2:-1].detach().cpu().numpy().tolist())
-    print(answer)
+    ans = tokenizer.decode(result[0, tokens.shape[1] + 2:-1].detach().cpu().numpy().tolist())
+    say_tts(tts_model, ans, callback=putify)
+    return ans
+
+
+TWITCH_NAME = "kqjacs"
+_cmd_pat = (
+    "^(@(?P<tags>[^ ]*) )?(:(?P<prefix>[^ ]+) +)?"
+    "(?P<command>[^ ]+)( *(?P<argument> .+))?"
+)
+_rfc_1459_command_regexp = re.compile(_cmd_pat)
+
+
+chat_queue = queue.Queue()
+async def socket(chat_queue):
+    async with websockets.connect("wss://irc-ws.chat.twitch.tv:443") as ws:
+        await ws.send("CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands")
+        await ws.send("PASS " + open("twitch_oauth").read())
+        await ws.send(f"NICK {TWITCH_NAME}")
+        await ws.send(f"JOIN #{TWITCH_NAME}")
+        while True:
+            text = await ws.recv()
+            grp = _rfc_1459_command_regexp.match(text).group
+            cmd, arg = grp("command").strip(), grp("argument")
+            if cmd == "PING":
+                await ws.send("PONG")
+            elif cmd == "PRIVMSG":
+                chat_queue.put(arg.partition(":")[-1])
+
+
+torch.manual_seed(12)
+launch_thread = lambda chat_queue: asyncio.run(socket(chat_queue))
+threading.Thread(target=launch_thread, args=(chat_queue,)).start()
+print("all loaded")
+async def main():
+    while True:
+        que = chat_queue.get()
+        print("", "que", que)
+        say_tts(tts_model, que[0], callback=putify)
+        answer(que)
+asyncio.run(main())
